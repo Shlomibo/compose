@@ -1,0 +1,18 @@
+{
+  "name": "compose",
+  "version": "0.1.0",
+  "description": "Function composition with ease",
+  "main": "dist/compose.js",
+  "repository": "https://github.com/Shlomibo/compose",
+  "author": "Shlomi Borovitz",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "npm run build -- -w"
+  },
+  "typings": "types/compose.d.ts",
+  "dependencies": {
+    "tslint": "^4.4.1",
+    "typescript": "^2.1.5"
+  }
+}

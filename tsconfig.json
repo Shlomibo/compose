@@ -1,0 +1,18 @@
+{
+    "compilerOptions": {
+        "module": "umd",
+        "target": "es6",
+        "noImplicitAny": false,
+        "sourceMap": true,
+        "alwaysStrict": true,
+        "declaration": true,
+        "declarationDir": "types",
+        "moduleResolution": "node",
+        "outDir": "dist",
+        "noFallthroughCasesInSwitch": true,
+        "noImplicitReturns": true,
+        "noImplicitThis": true,
+        "noUnusedLocals": true,
+        "strictNullChecks": true
+    }
+}
