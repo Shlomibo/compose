@@ -12,6 +12,8 @@
   },
   "typings": "types/compose.d.ts",
   "dependencies": {
+    "@types/lodash": "^4.14.50",
+    "lodash": "^4.17.4",
     "tslint": "^4.4.1",
     "typescript": "^2.1.5"
   }
