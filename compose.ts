@@ -35,13 +35,15 @@ export interface ComposingGlobals {
 }
 export function from(globals: ComposingGlobals): Composer {
 	const namespce = createNamespace(globals);
-	const args = Object.assign({}, globals[$args] || {});
+	const args = Object.assign({}, globals[$args] || {}),
+		argsStack = [];
 	return createComposer({
 		globals: namespce,
 		args,
-		decompser: next => next(),
+		decompser: next => (argsStack.length = 0, next()),
 		params: globals[$param] || [],
 		setArgs: extendedArgs => Object.assign(args, extendedArgs),
+		argsStack,
 	});
 }
 
@@ -53,6 +55,7 @@ interface ComposerArgs {
 	args: Record<string, any>;
 	params: string[];
 	setArgs: (args: Record<string, any>) => Record<string, any>;
+	argsStack: any[];
 }
 function createComposer(args: ComposerArgs): Composer {
 	const stab: Composer = {
@@ -91,6 +94,7 @@ function createComposer(args: ComposerArgs): Composer {
 				decomposer(next) {
 					target[$value] = resolveName(target, reciever, name);
 					target[$thisArg] = args.parent && args.parent[$value];
+					args.argsStack.push(target[$value]);
 					return next();
 				},
 			});
@@ -113,6 +117,10 @@ function createComposer(args: ComposerArgs): Composer {
 
 					if (forcedCall) {
 						funcArgs.pop();
+					}
+
+					if (thisArg && args.argsStack.length > 0) {
+						funcArgs.push(args.argsStack.pop());
 					}
 
 					if (forcedCall || isCall(definition, funcArgs)) {
@@ -259,9 +267,9 @@ function createNamespace(globals: ComposingGlobals): Namespace {
 function defaultAlloc(length) {
 	return Array.from({ length }, (_, i) => i);
 }
-function reverseAlloca(length) {
-	return Array.from({ length }, (_, i) => length - i - 1);
-}
+// function reverseAlloca(length) {
+// 	return Array.from({ length }, (_, i) => length - i - 1);
+// }
 
 function isFunctionDefinition(val): val is FunctionDefinition {
 	return (val instanceof Array) &&
