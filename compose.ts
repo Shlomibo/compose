@@ -3,9 +3,12 @@ import {
 	$namspaces,
 	$decompose,
 	$args,
+	$arg,
 	$value,
 	$thisArg,
+	$param,
 	$funcs,
+	$decomposition,
 	$methods,
 	_$,
 } from './symbols';
@@ -24,17 +27,21 @@ interface Namespace {
 	[k: string]: FunctionDefinition | FuncMap | ValueDefinition;
 }
 
-const root: Namespace = {};
+const root: Namespace = {
+};
 
 export interface ComposingGlobals {
-	[k: string]: Func | FunctionDefinition | FunctionDefinitions | {};
+	[k: string]: any;
 }
 export function from(globals: ComposingGlobals): Composer {
-	const namespce = createGlobalNamespace(globals);
+	const namespce = createNamespace(globals);
+	const args = Object.assign({}, globals[$args] || {});
 	return createComposer({
 		globals: namespce,
-		args: globals[$args] || {},
+		args,
 		decompser: next => next(),
+		params: globals[$param] || [],
+		setArgs: extendedArgs => Object.assign(args, extendedArgs),
 	});
 }
 
@@ -44,10 +51,34 @@ interface ComposerArgs {
 	decompser: Decomposer;
 	name?: PropertyKey;
 	args: Record<string, any>;
+	params: string[];
+	setArgs: (args: Record<string, any>) => Record<string, any>;
 }
 function createComposer(args: ComposerArgs): Composer {
 	const stab: Composer = {
-		[$decompose]() { }
+		[$arg]: args.args,
+
+		[$decomposition](next: NextCall) {
+			if (args.parent) {
+				parent[$decomposition](
+					args.decompser.bind(null, next)
+				);
+			}
+			else {
+				return args.decompser(next);
+			}
+		},
+		[$decompose](this: Composer, ...decompositionArgs) {
+			if (decompositionArgs.length > 0) {
+				args.setArgs(
+					decompositionArgs.reduce((argsObj, value, index) => {
+						argsObj[args.params[index]] = value;
+						return argsObj;
+					}, {})
+				);
+			}
+			return this[$decomposition](x => x);
+		},
 	};
 	const that = new Proxy(stab, {
 		setPrototypeOf: () => false,
@@ -196,7 +227,7 @@ function asArray<T>(arrayLike: ArrayLike<T>) {
 		: Array.from(arrayLike);
 }
 
-function createGlobalNamespace(globals: ComposingGlobals): Namespace {
+function createNamespace(globals: ComposingGlobals): Namespace {
 	const namespace = Object.create(root);
 	const funcs = namespace[$funcs] = new Map(root[$funcs] as FuncMap);
 	appendNamedFunctions(globals);
