@@ -163,7 +163,7 @@ function createComposer(args: ComposerArgs): Composer {
 		args = typeof argsMapping === 'number'
 			? args
 			: asArray(argsMapping).map(i => args[i]);
-		return func.apply(thisArg, args);
+		return func.apply(decomposeValue(thisArg), args.map(decomposeValue));
 	}
 	function isCall([, argsMapping]: FunctionDefinition, args: any[]): boolean {
 		return typeof argsMapping === 'number'
@@ -210,14 +210,14 @@ function createComposer(args: ComposerArgs): Composer {
 		) {
 			return reciever[name];
 		}
-		if (!!args.parent &&
-			args.parent[$value] != null &&
-			typeof parent[$value][name] !== 'undefined'
+		const parentValue = args.parent && decomposeValue(args.parent[$value]);
+		if (parentValue != null &&
+			typeof parentValue[name] !== 'undefined'
 		) {
-			return parent[$value][name];
+			return parentValue[name];
 		}
 		if (isPropOf(args.args, name)) {
-			return args.args[name];
+			return decomposeValue(args.args[name]);
 		}
 		if (isPropOf(args.globals, name)) {
 			return args.globals[name];
@@ -277,6 +277,16 @@ function isFunctionDefinition(val): val is FunctionDefinition {
 		typeof val[0] === 'function' &&
 		(typeof val[1] === 'number' ||
 			Array.isArray(val[1]));
+}
+
+function isComposer(val): val is Composer {
+	return val && typeof val[$decompose] === 'function';
+}
+
+function decomposeValue(val): any {
+	return isComposer(val)
+		? val[$decompose]()
+		: val;
 }
 
 export default { from };
