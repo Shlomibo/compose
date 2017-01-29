@@ -1,11 +1,12 @@
 import * as _ from 'lodash';
 import {
-	$namspaces,
+	$namespaces,
 	$decompose,
 	$args,
 	$arg,
 	$value,
 	$thisArg,
+	$set,
 	$param,
 	$funcs,
 	$decomposition,
@@ -19,8 +20,8 @@ export type FunctionDefinition = [Func, FunctionDescriptor];
 export type FunctionDefinitions = FunctionDefinition[];
 export type Composer = { [k: string]: any };
 
-type NextCall = (...args: any[]) => any;
-type Decomposer = (next: NextCall) => any;
+type NextCall = () => any;
+type Decomposer = (next?: NextCall) => any;
 type FuncMap = Map<Func, FunctionDescriptor>;
 type ValueDefinition = [{}, null];
 interface Namespace {
@@ -35,40 +36,42 @@ export interface ComposingGlobals {
 }
 export function from(globals: ComposingGlobals): Composer {
 	const namespce = createNamespace(globals);
-	const args = Object.assign({}, globals[$args] || {}),
-		argsStack = [];
+	const args = { ...(globals[$args] || {}) };
 	return createComposer({
 		globals: namespce,
 		args,
-		decompser: next => (argsStack.length = 0, next()),
+		decomposer: next => next && next(),
 		params: globals[$param] || [],
 		setArgs: extendedArgs => Object.assign(args, extendedArgs),
-		argsStack,
+		argsStack: [],
 	});
 }
 
 interface ComposerArgs {
 	globals: Namespace;
 	parent?: Composer;
-	decompser: Decomposer;
+	decomposer: Decomposer;
 	name?: PropertyKey;
 	args: Record<string, any>;
 	params: string[];
 	setArgs: (args: Record<string, any>) => Record<string, any>;
 	argsStack: any[];
+	noFuncCall?: boolean;
 }
 function createComposer(args: ComposerArgs): Composer {
-	const stab: Composer = {
+	function noop() { }
+	const stab: Composer = Object.assign(noop as any, {
 		[$arg]: args.args,
 
-		[$decomposition](next: NextCall) {
+		[$decomposition](next?: NextCall) {
 			if (args.parent) {
-				parent[$decomposition](
-					args.decompser.bind(null, next)
+				args.parent[$decomposition](
+					args.decomposer.bind(null, next)
 				);
 			}
 			else {
-				return args.decompser(next);
+				args.argsStack = [];
+				args.decomposer(next);
 			}
 		},
 		[$decompose](this: Composer, ...decompositionArgs) {
@@ -80,22 +83,43 @@ function createComposer(args: ComposerArgs): Composer {
 					}, {})
 				);
 			}
-			return this[$decomposition](x => x);
+			this[$decomposition]();
+			return decomposeValue(this[$value]);
 		},
-	};
+		[$set](this: Composer, val): Composer {
+			const that = this;
+			return createComposer({
+				...args,
+				parent: stab,
+				decomposer(next) {
+					that[$thisArg] = null;
+					that[$value] = () => val;
+					args.argsStack.push(val);
+					return next && next();
+				},
+			});
+		}
+	});
 	const that = new Proxy(stab, {
 		setPrototypeOf: () => false,
 		defineProperty: () => false,
 		get(target, prop, reciever) {
+			if (typeof prop === 'symbol' &&
+				-1 !== Object.getOwnPropertySymbols(target)
+					.indexOf(prop)
+			) {
+				return Reflect.get(target, prop, reciever);
+			}
+
 			return createComposer({
 				...args,
-				parent: that,
-				name: name,
+				parent: target,
+				name: prop,
 				decomposer(next) {
-					target[$value] = resolveName(target, reciever, name);
+					target[$value] = resolveName(target, reciever, prop);
 					target[$thisArg] = args.parent && args.parent[$value];
 					args.argsStack.push(target[$value]);
-					return next();
+					return next && next();
 				},
 			});
 		},
@@ -109,7 +133,8 @@ function createComposer(args: ComposerArgs): Composer {
 			return createComposer({
 				...args,
 				name: undefined,
-				decompser(next) {
+				parent: target,
+				decomposer(next) {
 					const definition = resolveFunction(),
 						forcedCall = funcArgs[funcArgs.length - 1] === _$,
 						thisArg = args.parent && args.parent[$thisArg];
@@ -130,7 +155,10 @@ function createComposer(args: ComposerArgs): Composer {
 						result = partialCall(definition, thisArg, funcArgs);
 					}
 
-					return next(result);
+					target[$value] = decomposeValue(result);
+					target[$thisArg] = null;
+					args.argsStack.push(result);
+					return next && next();
 				},
 			}
 			);
@@ -184,6 +212,7 @@ function createComposer(args: ComposerArgs): Composer {
 		}
 
 		if (args.name &&
+			args.globals[args.name] &&
 			typeof args.globals[args.name][0] === 'function'
 		) {
 			return args.globals[args.name] as any;
@@ -192,11 +221,11 @@ function createComposer(args: ComposerArgs): Composer {
 
 
 		function resolveUnamedFunc(): FunctionDefinition {
-			const func = args.parent![$value] as Func,
+			const func = decomposeValue(args.parent![$value]) as Func,
 				funcMap = args.globals[$funcs] as FuncMap;
 			if (funcMap.has(func)
 			) {
-				return <FunctionDefinition>funcMap.get(func);
+				return [func, funcMap.get(func)!];
 			}
 
 			const result: FunctionDefinition = [func, defaultAlloc(func.length)];
@@ -205,24 +234,27 @@ function createComposer(args: ComposerArgs): Composer {
 		}
 	}
 	function resolveName(target: Composer, reciever: Composer, name: PropertyKey): any {
+		let result;
 		if (typeof name === 'symbol' &&
 			-1 !== Object.getOwnPropertySymbols(target).indexOf(name)
 		) {
-			return reciever[name];
+			result = reciever[name];
 		}
 		const parentValue = args.parent && decomposeValue(args.parent[$value]);
 		if (parentValue != null &&
 			typeof parentValue[name] !== 'undefined'
 		) {
-			return parentValue[name];
+			result = parentValue[name];
 		}
 		if (isPropOf(args.args, name)) {
-			return decomposeValue(args.args[name]);
+			result = decomposeValue(args.args[name]);
 		}
 		if (isPropOf(args.globals, name)) {
-			return args.globals[name];
+			result = args.globals[name];
 		}
-		return undefined;
+		return isValueDefinition(result)
+			? result[0]
+			: result;
 	}
 }
 
@@ -240,7 +272,7 @@ function createNamespace(globals: ComposingGlobals): Namespace {
 	const funcs = namespace[$funcs] = new Map(root[$funcs] as FuncMap);
 	appendNamedFunctions(globals);
 
-	globals[$namspaces] && appendNamedFunctions(globals[$namspaces], true);
+	globals[$namespaces] && appendNamedFunctions(globals[$namespaces], true);
 	globals[$methods] && (globals[$methods] as FunctionDefinitions)
 		.forEach(([func, descriptor]) => void funcs.set(func, descriptor));
 
@@ -248,14 +280,15 @@ function createNamespace(globals: ComposingGlobals): Namespace {
 
 	function appendNamedFunctions(source, noDefinitions = false) {
 		Object.keys(source)
-			.map(name => [name, globals[name]] as [string, Func | FunctionDefinition | {}])
+			.map(name => [name, source[name]] as [string, Func | FunctionDefinition | {}])
 			.forEach(([name, value]) => {
 				if (typeof value === 'function') {
 					namespace[name] = [value, defaultAlloc(value.length)];
 				}
 				else if (!noDefinitions && isFunctionDefinition(value)) {
 					namespace[name] = value;
-					!funcs.has(value[0]) && funcs.set(value[0], value[1]);
+					const [func, definition] = value;
+					!funcs.has(func) && funcs.set(func, definition);
 				}
 				else {
 					namespace[name] = [value, null];
@@ -271,6 +304,11 @@ function defaultAlloc(length) {
 // 	return Array.from({ length }, (_, i) => length - i - 1);
 // }
 
+function isValueDefinition(val): val is ValueDefinition {
+	return Array.isArray(val) &&
+		val.length === 2 &&
+		val[1] == null;
+}
 function isFunctionDefinition(val): val is FunctionDefinition {
 	return (val instanceof Array) &&
 		val.length === 2 &&
