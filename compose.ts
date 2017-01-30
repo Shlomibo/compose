@@ -18,10 +18,15 @@ export type FunctionDescriptor = number | ArrayLike<number>;
 export type Func = (...args: any[]) => any;
 export type FunctionDefinition = [Func, FunctionDescriptor];
 export type FunctionDefinitions = FunctionDefinition[];
-export type Composer = { [k: string]: any };
+export interface Composer {
+	[k: string]: any;
+	[k: number]: any;
+	(...args): any;
+	new (): Composer;
+}
 
-type NextCall = () => any;
-type Decomposer = (next?: NextCall) => any;
+type NextCall = (parentVal) => any;
+type Decomposer = (next?: NextCall, parentValue?) => any;
 type FuncMap = Map<Func, FunctionDescriptor>;
 type ValueDefinition = [{}, null];
 interface Namespace {
@@ -40,13 +45,18 @@ export function from(globals: ComposingGlobals): Composer {
 	return createComposer({
 		globals: namespce,
 		args,
-		decomposer: next => next && next(),
+		decomposer: (next, parentValue) => next && next(parentValue),
 		params: globals[$param] || [],
 		setArgs: extendedArgs => Object.assign(args, extendedArgs),
 		argsStack: [],
 	});
 }
 
+enum CallType {
+	partial,
+	consumeArg,
+	leaveArg,
+}
 interface ComposerArgs {
 	globals: Namespace;
 	parent?: Composer;
@@ -62,17 +72,20 @@ function createComposer(args: ComposerArgs): Composer {
 	function noop() { }
 	const stab: Composer = Object.assign(noop as any, {
 		[$arg]: args.args,
+		[$value]: undefined,
 
 		[$decomposition](next?: NextCall) {
+			let result;
 			if (args.parent) {
-				args.parent[$decomposition](
+				result = args.parent[$decomposition](
 					args.decomposer.bind(null, next)
 				);
 			}
 			else {
 				args.argsStack = [];
-				args.decomposer(next);
+				result = args.decomposer(next);
 			}
+			return result;
 		},
 		[$decompose](this: Composer, ...decompositionArgs) {
 			if (decompositionArgs.length > 0) {
@@ -83,19 +96,19 @@ function createComposer(args: ComposerArgs): Composer {
 					}, {})
 				);
 			}
-			this[$decomposition]();
-			return decomposeValue(this[$value]);
+			return decomposeValue(this[$decomposition]());
 		},
 		[$set](this: Composer, val): Composer {
-			const that = this;
 			return createComposer({
 				...args,
 				parent: stab,
 				decomposer(next) {
-					that[$thisArg] = null;
-					that[$value] = () => val;
-					args.argsStack.push(val);
-					return next && next();
+					stab[$thisArg] = null;
+					stab[$value] = val;
+					pushArg();
+					return !!next
+						? next(val)
+						: val;
 				},
 			});
 		}
@@ -115,11 +128,12 @@ function createComposer(args: ComposerArgs): Composer {
 				...args,
 				parent: target,
 				name: prop,
-				decomposer(next) {
-					target[$value] = resolveName(target, reciever, prop);
-					target[$thisArg] = args.parent && args.parent[$value];
-					args.argsStack.push(target[$value]);
-					return next && next();
+				decomposer(next, parentValue) {
+					const value = target[$value] = resolveName(target, reciever, prop, parentValue);
+					target[$thisArg] = parentValue;
+					return !!next
+						? next(value)
+						: value;
 				},
 			});
 		},
@@ -134,8 +148,8 @@ function createComposer(args: ComposerArgs): Composer {
 				...args,
 				name: undefined,
 				parent: target,
-				decomposer(next) {
-					const definition = resolveFunction(),
+				decomposer(next, parentValue) {
+					const definition = resolveFunction(parentValue),
 						forcedCall = funcArgs[funcArgs.length - 1] === _$,
 						thisArg = args.parent && args.parent[$thisArg];
 					let result;
@@ -144,27 +158,53 @@ function createComposer(args: ComposerArgs): Composer {
 						funcArgs.pop();
 					}
 
-					if (thisArg && args.argsStack.length > 0) {
+					let callType = checkCallType(definition, funcArgs);
+
+					if (args.argsStack.length > 0 &&
+						(forcedCall ||
+							callType !== CallType.leaveArg)
+					) {
 						funcArgs.push(args.argsStack.pop());
 					}
+					else if (args.argsStack.length === 0 &&
+						callType === CallType.consumeArg
+					) {
+						callType = CallType.partial;
+					}
 
-					if (forcedCall || isCall(definition, funcArgs)) {
+
+					if (forcedCall || callType !== CallType.partial) {
 						result = call(definition, thisArg, funcArgs);
 					}
 					else {
 						result = partialCall(definition, thisArg, funcArgs);
 					}
 
-					target[$value] = decomposeValue(result);
+					const decomposedResult = target[$value] = decomposeValue(result);
 					target[$thisArg] = null;
 					args.argsStack.push(result);
-					return next && next();
+					return !!next
+						? next(decomposedResult)
+						: decomposedResult;
 				},
 			}
 			);
 		},
-		construct(target, args, newTarget) {
-			return createComposer({ ...args });
+		construct(target, [globalsExt]: [ComposingGlobals], newTarget) {
+			const newGlobals = createNamespace(globalsExt || {}),
+				newFuncs = newGlobals[$funcs] as FuncMap,
+				existingFuncs = args.globals[$funcs] as FuncMap;
+
+			existingFuncs.forEach((descriptor, func) => void newFuncs.set(func, descriptor));
+
+			return createComposer({
+				...args,
+				parent: newTarget,
+				globals: {
+					...args.globals,
+					...newGlobals,
+				}
+			});
 		},
 	});
 	return that;
@@ -193,20 +233,24 @@ function createComposer(args: ComposerArgs): Composer {
 			: asArray(argsMapping).map(i => args[i]);
 		return func.apply(decomposeValue(thisArg), args.map(decomposeValue));
 	}
-	function isCall([, argsMapping]: FunctionDefinition, args: any[]): boolean {
-		return typeof argsMapping === 'number'
-			? args.length >= argsMapping
-			: args.length >= argsMapping.length;
+	function checkCallType([, argsMapping]: FunctionDefinition, args: any[]): CallType {
+		const funcLength = typeof argsMapping === 'number'
+			? argsMapping
+			: argsMapping.length;
+
+		return args.length < funcLength - 1 ? CallType.partial :
+			args.length < funcLength ? CallType.consumeArg :
+				CallType.leaveArg;
 	}
-	function resolveFunction(): FunctionDefinition {
+	function resolveFunction(parentValue): FunctionDefinition {
 		if (args.parent &&
-			isFunctionDefinition(args.parent[$value])
+			isFunctionDefinition(parentValue)
 		) {
-			return args.parent[$value];
+			return parentValue;
 		}
 
 		if (args.parent &&
-			typeof args.parent[$value] === 'function'
+			typeof parentValue === 'function'
 		) {
 			return resolveUnamedFunc();
 		}
@@ -215,6 +259,7 @@ function createComposer(args: ComposerArgs): Composer {
 			args.globals[args.name] &&
 			typeof args.globals[args.name][0] === 'function'
 		) {
+			pushArg();
 			return args.globals[args.name] as any;
 		}
 		throw new Error('Cannot resolve');
@@ -225,31 +270,39 @@ function createComposer(args: ComposerArgs): Composer {
 				funcMap = args.globals[$funcs] as FuncMap;
 			if (funcMap.has(func)
 			) {
-				return [func, funcMap.get(func)!];
+				return [func, funcMap.get(func) !];
 			}
 
 			const result: FunctionDefinition = [func, defaultAlloc(func.length)];
 			funcMap.set(func, result[1]);
 			return result;
 		}
+
 	}
-	function resolveName(target: Composer, reciever: Composer, name: PropertyKey): any {
-		let result;
+	function pushArg() {
+		if (args.parent) {
+			args.argsStack.push(args.parent[$value]);
+		}
+	}
+	function resolveName(target: Composer, reciever: Composer, name: PropertyKey, parentValue): any {
 		if (typeof name === 'symbol' &&
 			-1 !== Object.getOwnPropertySymbols(target).indexOf(name)
 		) {
-			result = reciever[name];
+			return reciever[name];
 		}
-		const parentValue = args.parent && decomposeValue(args.parent[$value]);
+
+		let result;
 		if (parentValue != null &&
 			typeof parentValue[name] !== 'undefined'
 		) {
 			result = parentValue[name];
 		}
-		if (isPropOf(args.args, name)) {
+		else if (isPropOf(args.args, name)) {
+			pushArg();
 			result = decomposeValue(args.args[name]);
 		}
-		if (isPropOf(args.globals, name)) {
+		else if (isPropOf(args.globals, name)) {
+			pushArg();
 			result = args.globals[name];
 		}
 		return isValueDefinition(result)
