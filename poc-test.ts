@@ -1,7 +1,7 @@
 import Compose from './compose';
 import {
 	$namespaces,
-	$set,
+	$val,
 	$decompose,
 	$methods,
 	_$,
@@ -13,9 +13,9 @@ const t = Compose.from({
 	[$namespaces]: global,
 	[$methods]: [[console.log, Infinity]],
 })
-[$set]('world')
+[$val]('world')
 	.console
 	.log('hello', _$)
-[$set]('Success');
+[$val]('Success');
 
 console.log(t[$decompose]());
