@@ -58,7 +58,7 @@ const whatAmI = composer
 	.fromBool('sudo')
 [$decompose];
 
-// [0 -> 4]
+// [0 -> 9]
 const seq = Array.from({ length: 10 }, (_, i) => i);
 
 const filtered = composer.filterByModulu(2)
