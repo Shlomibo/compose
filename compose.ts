@@ -108,7 +108,7 @@ function createComposer(args: ComposerArgs, isRoot?: boolean): Composer {
 					stub[$value] = val;
 					argsStack.push(parentValue);
 					return !!next
-						? next(val, argsStack)
+						? next(argsStack, val)
 						: val;
 				},
 			});
@@ -244,7 +244,7 @@ function createComposer(args: ComposerArgs, isRoot?: boolean): Composer {
 		args = typeof argsMapping === 'number'
 			? args
 			: asArray(argsMapping).map(i => args[i]);
-		return func.apply(decomposeValue(thisArg), args.map(decomposeValue));
+		return func.apply(decomposeValue(thisArg), args.map(decomposeFunction));
 	}
 	function checkCallType([, argsMapping]: FunctionDefinition, args: any[]): CallType {
 		const funcLength = typeof argsMapping === 'number'
@@ -388,6 +388,14 @@ function isFunctionDefinition(val): val is FunctionDefinition {
 
 function isComposer(val): val is Composer {
 	return val && typeof val[$decompose] === 'function';
+}
+
+function decomposeFunction(val): Func {
+	val = decomposeValue(val);
+	if (isFunctionDefinition(val)) {
+		return val[0];
+	}
+	return val;
 }
 
 function decomposeValue(val): any {
