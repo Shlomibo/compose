@@ -62,6 +62,7 @@ const whatAmI = composer
 const seq = Array.from({ length: 10 }, (_, i) => i);
 
 const filtered = composer.filterByModulu(2)
+['']
 [$val](seq)
 	.filter()
 [$decompose]();

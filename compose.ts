@@ -53,11 +53,6 @@ export function from(globals: ComposingGlobals): Composer {
 	}, true);
 }
 
-enum CallType {
-	partial,
-	consumeArg,
-	leaveArg,
-}
 interface ComposerArgs {
 	globals: Namespace;
 	parent?: Composer;
@@ -136,6 +131,9 @@ function createComposer(args: ComposerArgs, isRoot?: boolean): Composer {
 			) {
 				return Reflect.get(target, prop, reciever);
 			}
+			else if (prop === '') {
+				return that;
+			}
 
 			return createComposer({
 				...args,
@@ -162,39 +160,54 @@ function createComposer(args: ComposerArgs, isRoot?: boolean): Composer {
 				name: undefined,
 				parent: stub,
 				decomposer(next, argsStack, parentValue) {
-					const definition = resolveFunction(argsStack, parentValue),
-						forcedCall = funcArgs[funcArgs.length - 1] === _$,
+					let definition: FunctionDefinition | null = resolveFunction(argsStack, parentValue),
 						thisArg = args.parent && args.parent[$thisArg],
 						callArgs = [...funcArgs];
-					let result;
+					let result,
+						decomposedResult;
 
-					if (forcedCall) {
-						callArgs.pop();
+					while (definition) {
+						let descriptor = definition[1],
+							forcedCall = callArgs[callArgs.length - 1] === _$;
+
+						if (forcedCall) {
+							callArgs.pop();
+						}
+						const funcLength = typeof descriptor === 'number'
+							? descriptor
+							: descriptor.length;
+
+						let isPartial = isParetialCall(definition, callArgs, argsStack);
+
+						while (
+							argsStack.length > 0 &&
+							callArgs.length < funcLength
+						) {
+							callArgs.push(argsStack.pop());
+						}
+
+						if (forcedCall || !isPartial) {
+							result = call(definition, thisArg, callArgs);
+						}
+						else {
+							result = partialCall(definition, thisArg, callArgs);
+						}
+						decomposedResult = decomposeValue(result);
+						definition = null;
+
+						if (!isPartial &&
+							callArgs.length > 0 &&
+							(isFunctionDefinition(decomposedResult) ||
+								typeof decomposedResult === 'function')
+						) {
+							definition = isFunctionDefinition(decomposedResult)
+								? decomposedResult
+								: [decomposedResult, defaultAlloc(decomposedResult.length)];
+						}
 					}
 
-					let callType = checkCallType(definition, callArgs);
+					target[$value] = decomposedResult;
 
-					if (argsStack.length > 0 &&
-						(forcedCall ||
-							callType !== CallType.leaveArg)
-					) {
-						callArgs.push(argsStack.pop());
-					}
-					else if (argsStack.length === 0 &&
-						callType === CallType.consumeArg
-					) {
-						callType = CallType.partial;
-					}
-
-
-					if (forcedCall || callType !== CallType.partial) {
-						result = call(definition, thisArg, callArgs);
-					}
-					else {
-						result = partialCall(definition, thisArg, callArgs);
-					}
-
-					const decomposedResult = target[$value] = decomposeValue(result);
 					target[$thisArg] = null;
 					return !!next
 						? next(argsStack, decomposedResult)
@@ -246,14 +259,12 @@ function createComposer(args: ComposerArgs, isRoot?: boolean): Composer {
 			: asArray(argsMapping).map(i => args[i]);
 		return func.apply(decomposeValue(thisArg), args.map(decomposeFunction));
 	}
-	function checkCallType([, argsMapping]: FunctionDefinition, args: any[]): CallType {
+	function isParetialCall([, argsMapping]: FunctionDefinition, args: any[], stack: any[]): boolean {
 		const funcLength = typeof argsMapping === 'number'
 			? argsMapping
 			: argsMapping.length;
 
-		return args.length < funcLength - 1 ? CallType.partial :
-			args.length < funcLength ? CallType.consumeArg :
-				CallType.leaveArg;
+		return funcLength > args.length + stack.length;
 	}
 	function resolveFunction(argsStack: any[], parentValue): FunctionDefinition {
 		if (args.parent &&
