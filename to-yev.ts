@@ -15,7 +15,10 @@ function decode(str: string, key: RegExp): string {
 	return str.replace(key, '');
 }
 
+// This code, here, is too complicated for you to comprehend, as it contains a call that also
+// pass a single argument, in the form if object literal - with no restrictions on its content.
 const composer: any = Compose.from({
+	// A FUNCTION IN AN OBJECT LITERAL 😱
 	fromNumber(str: string, val) {
 		let result;
 		if (typeof val === 'number') {
@@ -52,8 +55,11 @@ const composer: any = Compose.from({
 });
 
 const whatAmI = composer
+	// Arguments are passed to the first call here
 	.fromNumber('A')
+	// Maybe monad?
 [$maybe]()
+	// Each result is passed down to thte next function (a result may be a function in case of currying)
 	.fromString('that')
 	.fromBool('sudo')
 [$decompose];
@@ -62,7 +68,11 @@ const whatAmI = composer
 const seq = Array.from({ length: 10 }, (_, i) => i);
 
 const filtered = composer.filterByModulu(2)
-['']
+// When a call is made against a "global" function, the previous result is pushed into a stach
+// The next line signifies this, but it actually boils down to [''] - which returns this
+// - which means this whole line could be omitted
+[[]][[]][[]][[]][[]][[]][[]][[]]
+// This just pass the argument into the call chain
 [$val](seq)
 	.filter()
 [$decompose]();
